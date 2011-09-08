@@ -1,0 +1,75 @@
+--- old/src/gui/embedded/qkbdtty_qws.cpp	2011-09-08 01:50:37.000000000 +0800
++++ new/src/gui/embedded/qkbdtty_qws.cpp	2011-09-08 04:49:33.000000000 +0800
+@@ -54,6 +54,7 @@
+ 
+ #if defined Q_OS_LINUX
+ #  include <linux/kd.h>
++#  include <linux/input.h>
+ #  include <linux/vt.h> //TODO: move vt handling somewhere else (QLinuxFbScreen?)
+ 
+ #  include "qscreen_qws.h"
+@@ -105,7 +106,8 @@
+     delete d;
+ }
+ 
+-bool QWSTtyKeyboardHandler::filterKeycode(char &)
++
++bool QWSTtyKeyboardHandler::filterInputEvent(quint16 &, qint32 &)
+ {
+     return false;
+ }
+@@ -236,11 +238,11 @@
+ 
+ void QWSTtyKbPrivate::readKeycode()
+ {
+-    char buffer[32];
++    struct ::input_event buffer[32];
+     int n = 0;
+ 
+     forever {
+-        n = QT_READ(m_tty_fd, buffer + n, 32 - n);
++        n = QT_READ(m_tty_fd, reinterpret_cast<char *>(buffer) + n, sizeof(buffer) - n);
+ 
+         if (n == 0) {
+             qWarning("Got EOF from the input device.");
+@@ -248,18 +250,25 @@
+         } else if (n < 0 && (errno != EINTR && errno != EAGAIN)) {
+             qWarning("Could not read from input device: %s", strerror(errno));
+             return;
+-        } else {
++        } else if (n % sizeof(buffer[0]) == 0) {
+             break;
+         }
+     }
+ 
++    n /= sizeof(buffer[0]);
++
+     for (int i = 0; i < n; ++i) {
+-        if (m_handler->filterKeycode(buffer[i]))
++        if (buffer[i].type != EV_KEY)
++            continue;
++
++        quint16 code = buffer[i].code;
++        qint32 value = buffer[i].value;
++
++        if (m_handler->filterInputEvent(code, value))
+             continue;
+ 
+         QWSKeyboardHandler::KeycodeAction ka;
+-        ka = m_handler->processKeycode(buffer[i] & 0x7f, (buffer[i] & 0x80) == 0x00, buffer[i] == m_last_keycode);
+-        m_last_keycode = buffer[i];
++        ka = m_handler->processKeycode(code, value != 0, value == 2);
+ 
+         switch (ka) {
+         case QWSKeyboardHandler::CapsLockOn:
+--- old/src/gui/embedded/qkbdtty_qws.h	2011-09-08 05:01:14.000000000 +0800
++++ new/src/gui/embedded/qkbdtty_qws.h	2011-09-08 04:49:39.000000000 +0800
+@@ -62,7 +62,7 @@
+     explicit QWSTtyKeyboardHandler(const QString&);
+     virtual ~QWSTtyKeyboardHandler();
+ 
+-    virtual bool filterKeycode(char &code);
++    virtual bool filterInputEvent(quint16 &, qint32 &);
+ 
+ private:
+     QWSTtyKbPrivate *d;
